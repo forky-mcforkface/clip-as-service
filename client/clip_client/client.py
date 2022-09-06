@@ -117,9 +117,10 @@ class Client:
             total=len(content) if hasattr(content, '__len__') else None,
         )
         results = DocumentArray()
+        content_copy = DocumentArray()
         with self._pbar:
             self._client.post(
-                **self._get_post_payload(content, kwargs),
+                **self._get_post_payload(content, content_copy, kwargs),
                 on_done=partial(self._gather_result, results=results),
             )
 
@@ -156,32 +157,34 @@ class Client:
             results.embeddings if ('__created_by_CAS__' in results[0].tags) else results
         )
 
-    def _iter_doc(self, content) -> Generator['Document', None, None]:
+    def _iter_doc(
+        self, content, content_copy: 'DocumentArray'
+    ) -> Generator['Document', None, None]:
         from rich import filesize
         from docarray import Document
 
         if hasattr(self, '_pbar'):
             self._pbar.start_task(self._s_task)
 
-        for c in content:
+        for i, c in enumerate(content):
             if isinstance(c, str):
                 _mime = mimetypes.guess_type(c)[0]
                 if _mime and _mime.startswith('image'):
-                    yield Document(
+                    d = Document(
                         tags={'__created_by_CAS__': True, '__loaded_by_CAS__': True},
                         uri=c,
                     ).load_uri_to_blob()
                 else:
-                    yield Document(tags={'__created_by_CAS__': True}, text=c)
+                    d = Document(tags={'__created_by_CAS__': True}, text=c)
             elif isinstance(c, Document):
                 if c.content_type in ('text', 'blob'):
-                    yield c
+                    d = c
                 elif not c.blob and c.uri:
                     c.load_uri_to_blob()
                     c.tags['__loaded_by_CAS__'] = True
-                    yield c
+                    d = c
                 elif c.tensor is not None:
-                    yield c
+                    d = c
                 else:
                     raise TypeError(f'unsupported input type {c!r} {c.content_type}')
             else:
@@ -198,12 +201,16 @@ class Client:
                     ),
                 )
 
-    def _get_post_payload(self, content, kwargs):
+            d.tags['__ordered_by_CAS__'] = i
+            content_copy.append(d)
+            yield d
+
+    def _get_post_payload(self, content, content_copy, kwargs):
         parameters = kwargs.get('parameters', {})
         model_name = parameters.get('model', '')
         payload = dict(
             on=f'/encode/{model_name}'.rstrip('/'),
-            inputs=self._iter_doc(content),
+            inputs=self._iter_doc(content, content_copy),
             request_size=kwargs.get('batch_size', 8),
             total_docs=len(content) if hasattr(content, '__len__') else None,
         )
@@ -295,9 +302,10 @@ class Client:
         )
 
         results = DocumentArray()
+        content_copy = DocumentArray()
         with self._pbar:
             async for da in self._async_client.post(
-                **self._get_post_payload(content, kwargs)
+                **self._get_post_payload(content, content_copy, kwargs)
             ):
                 if not results:
                     self._pbar.start_task(self._r_task)
