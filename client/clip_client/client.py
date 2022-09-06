@@ -116,27 +116,31 @@ class Client:
             not kwargs.get('show_progress'),
             total=len(content) if hasattr(content, '__len__') else None,
         )
-        results = DocumentArray()
+
         content_copy = DocumentArray()
         with self._pbar:
             self._client.post(
                 **self._get_post_payload(content, content_copy, kwargs),
-                on_done=partial(self._gather_result, results=results),
+                on_done=partial(self._gather_result, content_copy=content_copy),
             )
 
         for c in content:
             if hasattr(c, 'tags') and c.tags.pop('__loaded_by_CAS__', False):
                 c.pop('blob')
 
-        return self._unboxed_result(results)
+        return self._unboxed_result(content_copy)
 
-    def _gather_result(self, response, results: 'DocumentArray'):
+    def _gather_result(self, response, content_copy: 'DocumentArray'):
         from rich import filesize
 
-        if not results:
-            self._pbar.start_task(self._r_task)
+        # if not self._r_task.started:
+        self._pbar.start_task(self._r_task)
         r = response.data.docs
-        results.extend(r)
+        for d in r:
+            index = int(d.tags['__ordered_by_CAS__'])
+            content_copy[index].embedding = d.embedding
+            content_copy[index].tags.pop('__ordered_by_CAS__')
+        # results.extend(r)
         self._pbar.update(
             self._r_task,
             advance=len(r),
@@ -228,7 +232,9 @@ class Client:
         :return: the latency report in a dict.
         """
         st = time.perf_counter()
-        r = self._client.post('/', self._iter_doc([content]), return_responses=True)
+        r = self._client.post(
+            '/', self._iter_doc([content], DocumentArray()), return_responses=True
+        )
         ed = (time.perf_counter() - st) * 1000
         route = r[0].routes
         gateway_time = (
@@ -301,15 +307,17 @@ class Client:
             total=len(content) if hasattr(content, '__len__') else None,
         )
 
-        results = DocumentArray()
         content_copy = DocumentArray()
         with self._pbar:
             async for da in self._async_client.post(
                 **self._get_post_payload(content, content_copy, kwargs)
             ):
-                if not results:
-                    self._pbar.start_task(self._r_task)
-                results.extend(da)
+                # if not self._r_task.started:
+                self._pbar.start_task(self._r_task)
+                for d in da:
+                    index = int(d.tags['__ordered_by_CAS__'])
+                    content_copy[index].embedding = d.embedding
+                    content_copy[index].tags.pop('__ordered_by_CAS__')
                 self._pbar.update(
                     self._r_task,
                     advance=len(da),
@@ -324,7 +332,7 @@ class Client:
             if hasattr(c, 'tags') and c.tags.pop('__loaded_by_CAS__', False):
                 c.pop('blob')
 
-        return self._unboxed_result(results)
+        return self._unboxed_result(content_copy)
 
     def _prepare_streaming(self, disable, total):
 
@@ -446,7 +454,7 @@ class Client:
         with self._pbar:
             self._client.post(
                 **self._get_rank_payload(docs, kwargs),
-                on_done=partial(self._gather_result, results=results),
+                on_done=partial(self._gather_result_backup, results=results),
             )
         for d in docs:
             self._reset_rank_doc(d, _source=kwargs.get('source', 'matches'))
@@ -482,3 +490,18 @@ class Client:
             self._reset_rank_doc(d, _source=kwargs.get('source', 'matches'))
 
         return results
+
+    def _gather_result_backup(self, response, results: 'DocumentArray'):
+        from rich import filesize
+
+        if not results:
+            self._pbar.start_task(self._r_task)
+        r = response.data.docs
+        results.extend(r)
+        self._pbar.update(
+            self._r_task,
+            advance=len(r),
+            total_size=str(
+                filesize.decimal(int(os.environ.get('JINA_GRPC_RECV_BYTES', '0')))
+            ),
+        )
