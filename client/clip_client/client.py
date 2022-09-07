@@ -130,8 +130,7 @@ class Client:
             if hasattr(c, 'tags') and c.tags.pop('__loaded_by_CAS__', False):
                 c.pop('blob')
 
-        _unbox = hasattr(content, '__len__') and isinstance(content[0], str)
-        return self._unboxed_result(_content_copy, _unbox)
+        return self._unboxed_result(content, _content_copy)
 
     def _gather_result(self, response, content_copy: 'DocumentArray'):
         from rich import filesize
@@ -153,14 +152,17 @@ class Client:
         )
 
     @staticmethod
-    def _unboxed_result(results: 'DocumentArray', unbox: bool = False):
+    def _unboxed_result(original_input, results: 'DocumentArray'):
         if results.embeddings is None:
             raise ValueError(
                 'Empty embedding returned from the server. '
                 'This often due to a mis-config of the server, '
                 'restarting the server or changing the serving port number often solves the problem'
             )
-        return results.embeddings if unbox else results
+        _unbox = hasattr(original_input, '__len__') and isinstance(
+            original_input[0], str
+        )
+        return results.embeddings if _unbox else results
 
     def _iter_doc(
         self, content, content_copy: 'DocumentArray'
@@ -320,8 +322,8 @@ class Client:
             async for da in self._async_client.post(
                 **self._get_post_payload(content, _content_copy, kwargs)
             ):
-                # if not self._r_task.started:
-                self._pbar.start_task(self._r_task)
+                if not self._pbar._tasks[self._r_task].started:
+                    self._pbar.start_task(self._r_task)
                 for d in da:
                     index = int(d.tags['__ordered_by_CAS__'])
                     _content_copy[index].embedding = d.embedding
@@ -340,8 +342,7 @@ class Client:
             if hasattr(c, 'tags') and c.tags.pop('__loaded_by_CAS__', False):
                 c.pop('blob')
 
-        _unbox = hasattr(content, '__len__') and isinstance(content[0], str)
-        return self._unboxed_result(_content_copy, _unbox)
+        return self._unboxed_result(content, _content_copy)
 
     def _prepare_streaming(self, disable, total):
         if total is None:
