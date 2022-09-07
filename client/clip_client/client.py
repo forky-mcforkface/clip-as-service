@@ -341,7 +341,7 @@ class Client:
                 c.pop('blob')
 
         _unbox = isinstance(content, list) and isinstance(content[0], str)
-        return self._unboxed_result(_content_copy)
+        return self._unboxed_result(_content_copy, _unbox)
 
     def _prepare_streaming(self, disable, total):
         if total is None:
