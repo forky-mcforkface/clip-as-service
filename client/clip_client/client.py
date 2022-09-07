@@ -130,7 +130,7 @@ class Client:
             if hasattr(c, 'tags') and c.tags.pop('__loaded_by_CAS__', False):
                 c.pop('blob')
 
-        _unbox = isinstance(content, list) and isinstance(content[0], str)
+        _unbox = hasattr(content, '__len__') and isinstance(content[0], str)
         return self._unboxed_result(_content_copy, _unbox)
 
     def _gather_result(self, response, content_copy: 'DocumentArray'):
@@ -340,7 +340,7 @@ class Client:
             if hasattr(c, 'tags') and c.tags.pop('__loaded_by_CAS__', False):
                 c.pop('blob')
 
-        _unbox = isinstance(content, list) and isinstance(content[0], str)
+        _unbox = hasattr(content, '__len__') and isinstance(content[0], str)
         return self._unboxed_result(_content_copy, _unbox)
 
     def _prepare_streaming(self, disable, total):
