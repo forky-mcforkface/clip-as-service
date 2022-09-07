@@ -109,38 +109,41 @@ class Client:
     def encode(self, content, **kwargs):
         if isinstance(content, str):
             raise TypeError(
-                f'content must be an Iterable of [str, Document], try `.encode(["{content}"])` instead'
+                f'Content must be an Iterable of [str, Document], try `.encode(["{content}"])` instead'
             )
+        if isinstance(content, list) and len(content) == 0:
+            raise ValueError('Content must not be empty')
 
         self._prepare_streaming(
             not kwargs.get('show_progress'),
             total=len(content) if hasattr(content, '__len__') else None,
         )
 
-        content_copy = DocumentArray()
+        _content_copy = DocumentArray()
         with self._pbar:
             self._client.post(
-                **self._get_post_payload(content, content_copy, kwargs),
-                on_done=partial(self._gather_result, content_copy=content_copy),
+                **self._get_post_payload(content, _content_copy, kwargs),
+                on_done=partial(self._gather_result, content_copy=_content_copy),
             )
 
         for c in content:
             if hasattr(c, 'tags') and c.tags.pop('__loaded_by_CAS__', False):
                 c.pop('blob')
 
-        return self._unboxed_result(content_copy)
+        _unbox = isinstance(content, list) and isinstance(content[0], str)
+        return self._unboxed_result(_content_copy, _unbox)
 
     def _gather_result(self, response, content_copy: 'DocumentArray'):
         from rich import filesize
 
-        # if not self._r_task.started:
-        self._pbar.start_task(self._r_task)
+        if not self._pbar._tasks[self._r_task].started:
+            self._pbar.start_task(self._r_task)
         r = response.data.docs
         for d in r:
             index = int(d.tags['__ordered_by_CAS__'])
             content_copy[index].embedding = d.embedding
             content_copy[index].tags.pop('__ordered_by_CAS__')
-        # results.extend(r)
+
         self._pbar.update(
             self._r_task,
             advance=len(r),
@@ -150,16 +153,14 @@ class Client:
         )
 
     @staticmethod
-    def _unboxed_result(results: 'DocumentArray'):
+    def _unboxed_result(results: 'DocumentArray', unbox: bool = False):
         if results.embeddings is None:
             raise ValueError(
                 'Empty embedding returned from the server. '
                 'This often due to a mis-config of the server, '
                 'restarting the server or changing the serving port number often solves the problem'
             )
-        return (
-            results.embeddings if ('__created_by_CAS__' in results[0].tags) else results
-        )
+        return results.embeddings if unbox else results
 
     def _iter_doc(
         self, content, content_copy: 'DocumentArray'
@@ -302,22 +303,29 @@ class Client:
     async def aencode(self, content, **kwargs):
         from rich import filesize
 
+        if isinstance(content, str):
+            raise TypeError(
+                f'Content must be an Iterable of [str, Document], try `.encode(["{content}"])` instead'
+            )
+        if isinstance(content, list) and len(content) == 0:
+            raise ValueError('Content must not be empty')
+
         self._prepare_streaming(
             not kwargs.get('show_progress'),
             total=len(content) if hasattr(content, '__len__') else None,
         )
 
-        content_copy = DocumentArray()
+        _content_copy = DocumentArray()
         with self._pbar:
             async for da in self._async_client.post(
-                **self._get_post_payload(content, content_copy, kwargs)
+                **self._get_post_payload(content, _content_copy, kwargs)
             ):
                 # if not self._r_task.started:
                 self._pbar.start_task(self._r_task)
                 for d in da:
                     index = int(d.tags['__ordered_by_CAS__'])
-                    content_copy[index].embedding = d.embedding
-                    content_copy[index].tags.pop('__ordered_by_CAS__')
+                    _content_copy[index].embedding = d.embedding
+                    _content_copy[index].tags.pop('__ordered_by_CAS__')
                 self._pbar.update(
                     self._r_task,
                     advance=len(da),
@@ -332,10 +340,10 @@ class Client:
             if hasattr(c, 'tags') and c.tags.pop('__loaded_by_CAS__', False):
                 c.pop('blob')
 
-        return self._unboxed_result(content_copy)
+        _unbox = isinstance(content, list) and isinstance(content[0], str)
+        return self._unboxed_result(_content_copy)
 
     def _prepare_streaming(self, disable, total):
-
         if total is None:
             total = 500
             warnings.warn(
@@ -451,6 +459,7 @@ class Client:
             total=len(docs),
         )
         results = DocumentArray()
+        docs_copy = DocumentArray()
         with self._pbar:
             self._client.post(
                 **self._get_rank_payload(docs, kwargs),
@@ -469,6 +478,7 @@ class Client:
             total=len(docs),
         )
         results = DocumentArray()
+        docs_copy = DocumentArray()
         with self._pbar:
             async for da in self._async_client.post(
                 **self._get_rank_payload(docs, kwargs)
