@@ -123,7 +123,7 @@ class Client:
         with self._pbar:
             self._client.post(
                 **self._get_post_payload(content, _content_copy, kwargs),
-                on_done=partial(self._gather_result, content_copy=_content_copy),
+                on_done=partial(self._gather_encode_result, content_copy=_content_copy),
             )
 
         for c in content:
@@ -132,17 +132,17 @@ class Client:
 
         return self._unboxed_result(content, _content_copy)
 
-    def _gather_result(self, response, content_copy: 'DocumentArray'):
+    def _gather_encode_result(self, response, content_copy: 'DocumentArray'):
         from rich import filesize
 
-        if not self._pbar._tasks[self._r_task].started:
-            self._pbar.start_task(self._r_task)
         r = response.data.docs
         for d in r:
             index = int(d.tags['__ordered_by_CAS__'])
             content_copy[index].embedding = d.embedding
             content_copy[index].tags.pop('__ordered_by_CAS__')
 
+        if not self._pbar._tasks[self._r_task].started:
+            self._pbar.start_task(self._r_task)
         self._pbar.update(
             self._r_task,
             advance=len(r),
@@ -212,7 +212,7 @@ class Client:
             content_copy.append(d)
             yield d
 
-    def _get_post_payload(self, content, content_copy, kwargs):
+    def _get_post_payload(self, content, content_copy: 'DocumentArray', kwargs):
         parameters = kwargs.get('parameters', {})
         model_name = parameters.get('model', '')
         payload = dict(
@@ -322,12 +322,13 @@ class Client:
             async for da in self._async_client.post(
                 **self._get_post_payload(content, _content_copy, kwargs)
             ):
-                if not self._pbar._tasks[self._r_task].started:
-                    self._pbar.start_task(self._r_task)
                 for d in da:
                     index = int(d.tags['__ordered_by_CAS__'])
                     _content_copy[index].embedding = d.embedding
                     _content_copy[index].tags.pop('__ordered_by_CAS__')
+
+                if not self._pbar._tasks[self._r_task].started:
+                    self._pbar.start_task(self._r_task)
                 self._pbar.update(
                     self._r_task,
                     advance=len(da),
@@ -404,7 +405,7 @@ class Client:
         return d
 
     def _iter_rank_docs(
-        self, content, _source='matches'
+        self, content, content_copy: 'DocumentArray', source='matches'
     ) -> Generator['Document', None, None]:
         from rich import filesize
         from docarray import Document
@@ -412,9 +413,9 @@ class Client:
         if hasattr(self, '_pbar'):
             self._pbar.start_task(self._s_task)
 
-        for c in content:
+        for i, c in enumerate(content):
             if isinstance(c, Document):
-                yield self._prepare_rank_doc(c, _source)
+                d = self._prepare_rank_doc(c, source)
             else:
                 raise TypeError(f'Unsupported input type {c!r}')
 
@@ -429,13 +430,17 @@ class Client:
                     ),
                 )
 
-    def _get_rank_payload(self, content, kwargs):
+            d.tags['__ordered_by_CAS__'] = i
+            content_copy.append(d)
+            yield d
+
+    def _get_rank_payload(self, content, content_copy: 'DocumentArray', kwargs):
         parameters = kwargs.get('parameters', {})
         model_name = parameters.get('model', '')
         payload = dict(
             on=f'/rank/{model_name}'.rstrip('/'),
             inputs=self._iter_rank_docs(
-                content, _source=kwargs.get('source', 'matches')
+                content, content_copy, source=kwargs.get('source', 'matches')
             ),
             request_size=kwargs.get('batch_size', 8),
             total_docs=len(content) if hasattr(content, '__len__') else None,
@@ -457,36 +462,40 @@ class Client:
         """
         self._prepare_streaming(
             not kwargs.get('show_progress'),
-            total=len(docs),
+            total=len(docs) if hasattr(docs, '__len__') else None,
         )
         results = DocumentArray()
-        docs_copy = DocumentArray()
+        _docs_copy = DocumentArray()
         with self._pbar:
             self._client.post(
-                **self._get_rank_payload(docs, kwargs),
-                on_done=partial(self._gather_result_backup, results=results),
+                **self._get_rank_payload(docs, _docs_copy, kwargs),
+                on_done=partial(self._gather_rank_result, docs_copy=_docs_copy),
             )
         for d in docs:
             self._reset_rank_doc(d, _source=kwargs.get('source', 'matches'))
 
-        return results
+        return _docs_copy
 
     async def arank(self, docs: Iterable['Document'], **kwargs) -> 'DocumentArray':
         from rich import filesize
 
         self._prepare_streaming(
             not kwargs.get('show_progress'),
-            total=len(docs),
+            total=len(docs) if hasattr(docs, '__len__') else None,
         )
-        results = DocumentArray()
-        docs_copy = DocumentArray()
+
+        _docs_copy = DocumentArray()
         with self._pbar:
             async for da in self._async_client.post(
-                **self._get_rank_payload(docs, kwargs)
+                **self._get_rank_payload(docs, _docs_copy, kwargs)
             ):
-                if not results:
+                for d in da:
+                    index = int(d.tags['__ordered_by_CAS__'])
+                    _docs_copy[index].matches = d.matches
+                    _docs_copy[index].tags.pop('__ordered_by_CAS__')
+
+                if not self._pbar._tasks[self._r_task].started:
                     self._pbar.start_task(self._r_task)
-                results.extend(da)
                 self._pbar.update(
                     self._r_task,
                     advance=len(da),
@@ -500,15 +509,19 @@ class Client:
         for d in docs:
             self._reset_rank_doc(d, _source=kwargs.get('source', 'matches'))
 
-        return results
+        return _docs_copy
 
-    def _gather_result_backup(self, response, results: 'DocumentArray'):
+    def _gather_rank_result(self, response, docs_copy: 'DocumentArray'):
         from rich import filesize
 
-        if not results:
-            self._pbar.start_task(self._r_task)
         r = response.data.docs
-        results.extend(r)
+        for d in r:
+            index = int(d.tags['__ordered_by_CAS__'])
+            docs_copy[index].matches = d.matches
+            docs_copy[index].tags.pop('__ordered_by_CAS__')
+
+        if not self._pbar._tasks[self._r_task].started:
+            self._pbar.start_task(self._r_task)
         self._pbar.update(
             self._r_task,
             advance=len(r),
