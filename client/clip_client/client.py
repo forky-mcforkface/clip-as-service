@@ -111,8 +111,8 @@ class Client:
             raise TypeError(
                 f'Content must be an Iterable of [str, Document], try `.encode(["{content}"])` instead'
             )
-        if isinstance(content, list) and len(content) == 0:
-            raise ValueError('Content must not be empty')
+        if hasattr(content, '__len__') and len(content) == 0:
+            raise ValueError('Input content must not be empty')
 
         self._prepare_streaming(
             not kwargs.get('show_progress'),
@@ -309,8 +309,8 @@ class Client:
             raise TypeError(
                 f'Content must be an Iterable of [str, Document], try `.encode(["{content}"])` instead'
             )
-        if isinstance(content, list) and len(content) == 0:
-            raise ValueError('Content must not be empty')
+        if hasattr(content, '__len__') and len(content) == 0:
+            raise ValueError('Input content must not be empty')
 
         self._prepare_streaming(
             not kwargs.get('show_progress'),
@@ -460,11 +460,14 @@ class Client:
         :param docs: the input Documents
         :return: the ranked Documents in a DocumentArray.
         """
+        if hasattr(docs, '__len__') and len(docs) == 0:
+            raise ValueError('Input docs must not be empty')
+
         self._prepare_streaming(
             not kwargs.get('show_progress'),
             total=len(docs) if hasattr(docs, '__len__') else None,
         )
-        results = DocumentArray()
+
         _docs_copy = DocumentArray()
         with self._pbar:
             self._client.post(
@@ -478,6 +481,9 @@ class Client:
 
     async def arank(self, docs: Iterable['Document'], **kwargs) -> 'DocumentArray':
         from rich import filesize
+
+        if hasattr(docs, '__len__') and len(docs) == 0:
+            raise ValueError('Input docs must not be empty')
 
         self._prepare_streaming(
             not kwargs.get('show_progress'),
